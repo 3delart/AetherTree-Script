@@ -4,9 +4,84 @@ using System.Collections.Generic;
 // =============================================================
 // CHARACTERPROGRESS — Données complètes de sauvegarde
 // Path : Assets/Scripts/Progression/Save/CharacterProgress.cs
-// AetherTree GDD v30 — Section 38.4
+// AetherTree GDD v31
 // =============================================================
 
+// ── Item sauvegardé ───────────────────────────────────────────
+[System.Serializable]
+public class SavedItem
+{
+    public string category;
+    public string soName;
+    public int    rarityRank;
+    public int    upgradeLevel;
+    public int    quantity;
+    public bool   isEquipped;
+    public string slot;
+    public int    spiritLevel;
+    public int    spiritXP;
+    public string jewelrySlot;
+}
+
+// ── Slot SkillBar ─────────────────────────────────────────────
+[System.Serializable]
+public class SavedSkillSlot
+{
+    public int    slotIndex;
+    public string skillName;
+}
+
+// ── Quête sauvegardée ─────────────────────────────────────────
+[System.Serializable]
+public class SavedQuest
+{
+    public string     questID;
+    public QuestState state;
+    public List<int>  objectiveCounts = new List<int>();
+}
+
+// ── Affinité élémentaire ──────────────────────────────────────
+[System.Serializable]
+public class SavedElementAffinity
+{
+    public string element;
+    public float  weight;
+}
+
+// ── Progression d'une condition en cours ─────────────────────
+[System.Serializable]
+public class SavedConditionProgress
+{
+    public string     conditionID;
+    public List<int>  entryCounters  = new List<int>();
+    public List<bool> entryCompleted = new List<bool>();
+}
+
+// ── Mail sauvegardé ───────────────────────────────────────────
+[System.Serializable]
+public class SavedMail
+{
+    public string mailID;
+    public string senderName;
+    public bool   isFromServer;
+    public string sentAt;          // DateTime sérialisé en string ISO
+    public string subject;
+    public string body;
+    public bool   isRead;
+    public bool   rewardClaimed;
+
+    // Récompense
+    public bool   hasReward;
+    public int    rewardType;      // cast de RewardType en int
+    public string rewardSkillName; // nom du SO SkillData
+    public string rewardTitle;
+    public string rewardItemID;
+    public int    rewardItemQuantity;
+    public string rewardRecipeID;
+    public string rewardDescription;
+}
+
+// ── Paires clé/valeur ─────────────────────────────────────────
 [System.Serializable]
 public class StringIntPair
 {
@@ -23,25 +98,9 @@ public class StringFloatPair
     public StringFloatPair(string k, float v) { key = k; value = v; }
 }
 
-[System.Serializable]
-public class SavedItem
-{
-    public string category;    // "Weapon","Armor","Helmet","Gloves","Boots","Jewelry","Spirit","Consumable","Resource","Cosmetic"
-    public string soName;      // nom du SO pour le retrouver via Resources.FindObjectsOfTypeAll
-    public int    rarityRank;  // rareté — aligné sur WeaponInstance.rarityRank / ArmorInstance.rarityRank
-    public int    upgradeLevel;// niveau d'amélioration (+0 à +10) — Weapon et Armor uniquement
-    public int    quantity;    // pour les stackables (Consumable, Resource)
-    public bool   isEquipped;  // true = porté sur le joueur au moment de la sauvegarde
-    public string slot;        // "Weapon","Armor","Ring","Necklace","Bracelet","Spirit" si isEquipped
-}
-
-[System.Serializable]
-public class SavedSkillSlot
-{
-    public int    slotIndex;
-    public string skillName;
-}
-
+// =============================================================
+// CHARACTERPROGRESS
+// =============================================================
 [System.Serializable]
 public class CharacterProgress
 {
@@ -64,7 +123,7 @@ public class CharacterProgress
     // ④ Aeris
     public int aeris = 0;
 
-    // ⑤ Équipements + Inventaire (tous dans une liste)
+    // ⑤ Équipements + Inventaire
     public List<SavedItem> items = new List<SavedItem>();
 
     // ⑥ Skills débloqués
@@ -73,9 +132,21 @@ public class CharacterProgress
     // ⑦ Slots SkillBar (0–9)
     public List<SavedSkillSlot> skillBarSlots = new List<SavedSkillSlot>();
 
-    // ⑧ Conditions débloquées (UnlockManager)
+    // ⑧ Conditions débloquées
     public List<string> unlockedConditionIDs = new List<string>();
 
-    // ⑨ Compteurs activité (List au lieu de Dictionary — non sérialisable par JsonUtility)
+    // ⑨ Compteurs activité
     public List<StringIntPair> activityCountersList = new List<StringIntPair>();
+
+    // ⑩ Quêtes
+    public List<SavedQuest> quests = new List<SavedQuest>();
+
+    // ⑪ Jauge élémentaire
+    public List<SavedElementAffinity> elementAffinities = new List<SavedElementAffinity>();
+
+    // ⑫ Progression conditions en cours
+    public List<SavedConditionProgress> conditionProgresses = new List<SavedConditionProgress>();
+
+    // ⑬ Mails (Mailbox)
+    public List<SavedMail> mails = new List<SavedMail>();
 }

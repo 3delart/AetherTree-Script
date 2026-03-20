@@ -609,6 +609,67 @@ public class UnlockManager : MonoBehaviour
             MailboxSystem.Instance.SendRewardMail(condition, reward);
     }
 
+
+    /// <summary>Retourne la progression en cours de toutes les conditions non débloquées.</summary>
+    public List<SavedConditionProgress> GetConditionProgresses()
+    {
+        var result = new List<SavedConditionProgress>();
+
+        foreach (var condition in allConditions)
+        {
+            if (condition == null || string.IsNullOrEmpty(condition.conditionID)) continue;
+            // Inutile de sauvegarder les conditions déjà débloquées
+            if (records.ContainsKey(condition.conditionID)) continue;
+            if (!privateCounters.ContainsKey(condition.conditionID)) continue;
+
+            var counters  = privateCounters[condition.conditionID];
+            var completed = completedEntries[condition.conditionID];
+
+            // Ne sauvegarde que si au moins un compteur > 0
+            bool hasProgress = false;
+            foreach (var kvp in counters)
+                if (kvp.Value > 0) { hasProgress = true; break; }
+            if (!hasProgress) continue;
+
+            var saved = new SavedConditionProgress { conditionID = condition.conditionID };
+
+            for (int i = 0; i < condition.conditions.Count; i++)
+            {
+                saved.entryCounters .Add(counters.ContainsKey(i)  ? counters[i]         : 0);
+                saved.entryCompleted.Add(completed.Contains(i));
+            }
+
+            result.Add(saved);
+        }
+
+        return result;
+    }
+
+    /// <summary>Restaure la progression des conditions depuis la sauvegarde.</summary>
+    public void LoadConditionProgresses(List<SavedConditionProgress> progresses)
+    {
+        if (progresses == null) return;
+
+        foreach (var saved in progresses)
+        {
+            if (string.IsNullOrEmpty(saved.conditionID)) continue;
+            // Ne restaure pas les conditions déjà débloquées
+            if (records.ContainsKey(saved.conditionID)) continue;
+            if (!privateCounters.ContainsKey(saved.conditionID)) continue;
+
+            var counters  = privateCounters[saved.conditionID];
+            var completed = completedEntries[saved.conditionID];
+
+            for (int i = 0; i < saved.entryCounters.Count; i++)
+            {
+                if (counters.ContainsKey(i))
+                    counters[i] = saved.entryCounters[i];
+                if (i < saved.entryCompleted.Count && saved.entryCompleted[i])
+                    completed.Add(i);
+            }
+        }
+    }
+
     // =========================================================
     // UTILITAIRES PUBLICS
     // =========================================================

@@ -243,6 +243,18 @@ public class MailboxSystem : MonoBehaviour
         }
     }
 
+        public void RestoreMail(MailMessage mail)
+    {
+        if (mail == null || string.IsNullOrEmpty(mail.mailID)) return;
+ 
+        // Évite les doublons
+        if (messages.Exists(m => m.mailID == mail.mailID)) return;
+ 
+        messages.Add(mail);
+    }
+ 
+
+
     // =========================================================
     // ACCESSEURS
     // =========================================================

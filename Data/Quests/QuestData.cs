@@ -5,19 +5,98 @@ using System.Collections.Generic;
 // QUESTDATA — ScriptableObject de définition de quête
 // Path : Assets/Scripts/Data/Quests/QuestData.cs
 // AetherTree GDD v31 — §25
-//
-// Setup Inspector :
-//   questID            = identifiant unique (ex: "quest_braven_01")
-//   objectivesInOrder  = true  → séquentiels (groupID pour parallèle dans le groupe)
-//                        false → tous parallèles
-//
-// Exemple "Tuer 10 poulets ET 5 loups PUIS reparler au PNJ" :
-//   objectivesInOrder = true
-//   Objectif 0 : Kill "Poulet"  groupID="grp1"
-//   Objectif 1 : Kill "Loup"    groupID="grp1"   ← même groupe → parallèle
-//   Objectif 2 : TalkTo "PNJ"   groupID="grp2"   ← groupe suivant → débloqué après grp1
 // =============================================================
 
+// =============================================================
+// QUESTREWARDITEM — une ligne de récompense item
+// =============================================================
+[System.Serializable]
+public class QuestRewardItem
+{
+    [Header("— Équipements —")]
+    public WeaponData   weapon;
+    public ArmorData    armor;
+    public HelmetData   helmet;
+    public GlovesData   gloves;
+    public BootsData    boots;
+    public JewelryData  jewelry;
+    public SpiritData   spirit;
+
+    [Header("— Consommables & Ressources —")]
+    public ConsumableData consumable;
+    public ResourceData   resource;
+    [Min(1)]
+    public int quantity = 1;
+
+    [Header("— Gemmes & Runes —")]
+    public GemData  gem;
+    public RuneData rune;
+
+    // ── Nom affiché ───────────────────────────────────────────
+
+    public string DisplayName
+    {
+        get
+        {
+            if (weapon     != null) return weapon.weaponName;
+            if (armor      != null) return armor.armorName;
+            if (helmet     != null) return helmet.helmetName;
+            if (gloves     != null) return gloves.glovesName;
+            if (boots      != null) return boots.bootsName;
+            if (jewelry    != null) return jewelry.jewelryName;
+            if (spirit     != null) return spirit.spiritName;
+            if (consumable != null) return quantity > 1 ? $"{consumable.consumableName} ×{quantity}" : consumable.consumableName;
+            if (resource   != null) return quantity > 1 ? $"{resource.resourceName} ×{quantity}"    : resource.resourceName;
+            if (gem        != null) return gem.gemName;
+            if (rune       != null) return rune.runeName;
+            return "";
+        }
+    }
+
+    // ── Icône ─────────────────────────────────────────────────
+
+    public Sprite GetIcon()
+    {
+        if (weapon     != null) return weapon.icon;
+        if (armor      != null) return armor.icon;
+        if (helmet     != null) return helmet.icon;
+        if (gloves     != null) return gloves.icon;
+        if (boots      != null) return boots.icon;
+        if (jewelry    != null) return jewelry.icon;
+        if (spirit     != null) return spirit.icon;
+        if (consumable != null) return consumable.icon;
+        if (resource   != null) return resource.icon;
+        if (gem        != null) return gem.icon;
+        if (rune       != null) return rune.icon;
+        return null;
+    }
+
+    // ── Création InventoryItem ────────────────────────────────
+
+    public InventoryItem CreateItem()
+    {
+        int qty = Mathf.Max(1, quantity);
+
+        if (weapon     != null) return new InventoryItem(weapon.CreateDropInstance(WeaponData.RollRarity()));
+        if (armor      != null) return new InventoryItem(armor.CreateDropInstance(ArmorData.RollRarity()));
+        if (helmet     != null) return new InventoryItem(helmet.CreateInstance());
+        if (gloves     != null) return new InventoryItem(gloves.CreateInstance());
+        if (boots      != null) return new InventoryItem(boots.CreateInstance());
+        if (jewelry    != null) return new InventoryItem(jewelry.CreateInstance());
+        if (spirit     != null) return new InventoryItem(new SpiritInstance(spirit));
+        if (consumable != null) return new InventoryItem(consumable.CreateInstance(qty));
+        if (resource   != null) return new InventoryItem(resource.CreateInstance(qty));
+        if (gem        != null) return new InventoryItem(gem.CreateDropInstance());
+        if (rune       != null) return new InventoryItem(rune.CreateDropInstance());
+
+        Debug.LogWarning("[QuestRewardItem] Aucun SO assigné dans cette entrée.");
+        return null;
+    }
+}
+
+// =============================================================
+// QUESTDATA
+// =============================================================
 [CreateAssetMenu(fileName = "Quest_", menuName = "AetherTree/Quests/QuestData")]
 public class QuestData : ScriptableObject
 {
@@ -43,6 +122,10 @@ public class QuestData : ScriptableObject
     public int xpReward    = 100;
     public int aerisReward = 50;
 
+    [Header("Récompenses items")]
+    [Tooltip("Ajouter autant d'entrées que voulu.\nRemplir UN SEUL champ par entrée.")]
+    public List<QuestRewardItem> rewardItems = new List<QuestRewardItem>();
+
     // ── Helpers ───────────────────────────────────────────────
 
     public bool AllObjectivesComplete()
@@ -53,10 +136,6 @@ public class QuestData : ScriptableObject
         return true;
     }
 
-    /// <summary>
-    /// Indices des objectifs actuellement actifs (non complétés et débloqués).
-    /// Parallèle : tous. Séquentiel : groupe courant seulement.
-    /// </summary>
     public List<int> GetActiveObjectiveIndices()
     {
         var result = new List<int>();
@@ -69,14 +148,10 @@ public class QuestData : ScriptableObject
             return result;
         }
 
-        // Mode séquentiel — trouve le groupe courant
         for (int i = 0; i < objectives.Count; i++)
         {
             if (objectives[i].IsComplete) continue;
-
             string activeGroup = objectives[i].groupID;
-
-            // Ajoute tous les non-complétés du même groupe
             for (int j = i; j < objectives.Count; j++)
             {
                 if (objectives[j].groupID == activeGroup && !objectives[j].IsComplete)
@@ -106,7 +181,7 @@ public class QuestObjective
     [Tooltip("Description affichée. Ex: Tuer 10 poulets")]
     public string description = "";
 
-    [Tooltip("Objectifs avec le même groupID sont actifs simultanément en mode séquentiel.\nLaisser vide = objectif isolé.")]
+    [Tooltip("Objectifs avec le même groupID sont actifs simultanément en mode séquentiel.")]
     public string groupID = "";
 
     public QuestObjectiveType type = QuestObjectiveType.Kill;
@@ -117,7 +192,7 @@ public class QuestObjective
     [Tooltip("TalkTo — glisser le PNJData")]
     public PNJData targetPNJ;
 
-    [Tooltip("Deliver / Gather / Craft — glisser le SO item (ResourceData, ConsumableData, WeaponData...)")]
+    [Tooltip("Deliver / Gather / Craft — glisser le SO item")]
     public ScriptableObject targetItem;
 
     [Tooltip("Explore — ID de zone (string)")]
@@ -129,7 +204,6 @@ public class QuestObjective
     public bool   IsComplete    => currentCount >= requiredCount;
     public string ProgressLabel => $"{currentCount}/{requiredCount}";
 
-    // Nom de la cible — utilisé par QuestSystem pour les comparaisons
     public string TargetName => type switch
     {
         QuestObjectiveType.Kill    => targetMob  != null ? targetMob.mobName  : "",
@@ -151,13 +225,4 @@ public class QuestObjective
 }
 
 // =============================================================
-public enum QuestObjectiveType
-{
-    Kill,
-    TalkTo,
-    Deliver,
-    Gather,
-    Explore,
-    Craft,
-    Boss,
-}
+public enum QuestObjectiveType { Kill, TalkTo, Deliver, Gather, Explore, Craft, Boss }

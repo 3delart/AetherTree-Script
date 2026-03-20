@@ -125,7 +125,7 @@ public class QuestSystem : MonoBehaviour
 
         _states[quest.questID] = QuestState.TurnedIn;
 
-        // Récompenses
+        // XP
         if (quest.xpReward > 0)
         {
             player.AddCombatXP(quest.xpReward);
@@ -133,12 +133,33 @@ public class QuestSystem : MonoBehaviour
                 player.transform.position + Vector3.up * 2.5f, new Color(0.4f, 0.8f, 1f));
         }
 
+        // Aeris
         if (quest.aerisReward > 0 && AerisSystem.Instance != null)
         {
             AerisSystem.Instance.Add(quest.aerisReward);
             FloatingText.Spawn($"+{quest.aerisReward} ¤",
                 player.transform.position + Vector3.up * 2f, new Color(1f, 0.85f, 0.2f));
         }
+
+        // ── ITEMS ─────────────────────────────────────────────────
+        if (quest.rewardItems != null && InventorySystem.Instance != null)
+        {
+            foreach (var reward in quest.rewardItems)
+            {
+                if (reward == null) continue;
+                var item = reward.CreateItem();
+                if (item == null) continue;
+
+                bool added = InventorySystem.Instance.AddItem(item);
+                if (added)
+                    FloatingText.Spawn($"+{reward.DisplayName}",
+                        player.transform.position + Vector3.up * 1.5f,
+                        new Color(1f, 0.85f, 0.3f));
+                else
+                    Debug.LogWarning($"[QUEST] Inventaire plein — item {reward.DisplayName} perdu !");
+            }
+        }
+        // ──────────────────────────────────────────────────────────
 
         Debug.Log($"[QUEST] Terminée : {quest.questName} (+{quest.xpReward} XP / +{quest.aerisReward} ¤)");
 

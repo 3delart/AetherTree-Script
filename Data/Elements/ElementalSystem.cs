@@ -7,50 +7,25 @@ using UnityEngine;
 // Path : Assets/Scripts/Data/Elements/ElementalSystem.cs
 // AetherTree GDD v30 — Section 7
 //
-// Règles :
-//   - Jauge glissante (fenêtre de N "cast-équivalents")
-//   - Attaque basique  = 0.25 cast-équivalent
-//   - Sort élémentaire = 1.0 cast-équivalent
-//   - Fenêtre par défaut : 200 cast-équivalents (paramétrable)
-//   - Jauge commence à 100% Neutre
-//   - Mono si 1 élément ≥ 25% ET aucun autre ≥ 20%
-//   - Dual si 2 éléments ≥ 20%, écart < 10pts, ET sort combo équipé
-//   - Équilibriste si aucun élément ≥ 25%
-//
-// Cycle : 🌊 Eau → 🔥 Feu → 🌿 Nature → 🌍 Terre → ⚡ Foudre → 🌊 Eau
-// Duo   : ☀ Lumière ↔ 🌑 Ténèbres
-// Neutre : seul — pas de counter, pas de vulnérabilité
-// Glace supprimée v30
+// Logique : dilution ÉGALE
+//   Quand on ajoute du poids à un élément A, l'excédent est retiré
+//   ÉQUITABLEMENT sur tous les autres éléments présents (> 0).
 // =============================================================
 
 public enum TitleMode { Neutral, Mono, Dual, Equilibriste }
 
 public class ElementalSystem : MonoBehaviour
 {
-    // ── Paramètre Inspector ───────────────────────────────────
     [Header("Fenêtre glissante")]
     [Tooltip("Taille de la fenêtre en cast-équivalents (basic = 0.25, sort = 1.0)")]
     [SerializeField] private float _windowSize = 200f;
 
-    // ── Constantes de poids ───────────────────────────────────
     public const float BASIC_ATTACK_WEIGHT = 0.25f;
     public const float SKILL_WEIGHT        = 1.0f;
 
-    // ── Structure interne (évite les tuples nommés) ───────────
-    private struct CastEntry
-    {
-        public ElementType element;
-        public float       weight;
-        public CastEntry(ElementType e, float w) { element = e; weight = w; }
-    }
+    private Dictionary<ElementType, float> _weightCounts;
+    private int _totalCasts = 0;
 
-    // ── Données internes ──────────────────────────────────────
-    private readonly List<CastEntry>            _history      = new List<CastEntry>();
-    private          Dictionary<ElementType, float> _weightCounts;
-    private          float                      _totalWeight  = 0f;
-    private          int                        _totalCasts   = 0;
-
-    // ─────────────────────────────────────────────────────────
     private void Awake()
     {
         _weightCounts = new Dictionary<ElementType, float>();
@@ -60,153 +35,148 @@ public class ElementalSystem : MonoBehaviour
 
     private void Start()
     {
-        // GDD §7.3 : jauge commence à 100% Neutre.
-        // Dans Start() et non Awake() : _windowSize est injecté par Unity
-        // depuis l'Inspector AVANT Start(), mais PAS garanti avant Awake().
         InitNeutralWindow();
     }
 
-    /// <summary>
-    /// Remplit la fenêtre avec _windowSize cast-équivalents Neutre.
-    /// Appelé au Start(). Peut être rappelé après un reset de scène.
-    /// </summary>
     public void InitNeutralWindow()
     {
-        _history.Clear();
         foreach (ElementType t in Enum.GetValues(typeof(ElementType)))
             _weightCounts[t] = 0f;
-        _totalWeight = 0f;
-        _totalCasts  = 0;
 
-        _history.Add(new CastEntry(ElementType.Neutral, _windowSize));
         _weightCounts[ElementType.Neutral] = _windowSize;
-        _totalWeight = _windowSize;
+        _totalCasts = 0;
     }
 
     // =========================================================
-    // ENREGISTREMENT D'UN CAST
+    // CHARGEMENT SAUVEGARDE
     // =========================================================
 
     /// <summary>
-    /// Enregistre un cast dans la fenêtre glissante.
-    /// isBasicAttack = true → poids 0.25 | false → poids 1.0
+    /// Restaure les affinités depuis la sauvegarde.
+    /// Appelé par SaveSystem après un chargement.
     /// </summary>
+    public void LoadAffinities(List<SavedElementAffinity> affinities)
+    {
+        if (affinities == null || affinities.Count == 0)
+        {
+            InitNeutralWindow();
+            return;
+        }
+
+        // Remet tout à zéro
+        foreach (ElementType t in Enum.GetValues(typeof(ElementType)))
+            _weightCounts[t] = 0f;
+
+        // Applique les poids sauvegardés
+        foreach (var entry in affinities)
+        {
+            if (Enum.TryParse(entry.element, out ElementType type)
+                && type != ElementType.Any)   // ignore la valeur sentinelle Any = -1
+                _weightCounts[type] = Mathf.Max(0f, entry.weight);
+        }
+
+        // Renormalise
+        Renormalize();
+    }
+
+    // =========================================================
+    // ENREGISTREMENT D'UN CAST — dilution égale
+    // =========================================================
+
     public void RegisterCast(ElementType element, bool isBasicAttack = false)
     {
         float weight = isBasicAttack ? BASIC_ATTACK_WEIGHT : SKILL_WEIGHT;
-
-        _history.Add(new CastEntry(element, weight));
         _totalCasts++;
 
-        if (_weightCounts.ContainsKey(element))
-            _weightCounts[element] += weight;
-        else
-            _weightCounts[element] = weight;
+        // 1. Ajoute le poids à l'élément entrant
+        _weightCounts[element] += weight;
 
-        _totalWeight += weight;
+        // 2. Retire le même poids équitablement sur les autres éléments présents
+        float toDistribute = weight;
 
-        // Dilution proportionnelle : l excédent est retiré équitablement sur tous les
-        // éléments présents SAUF l élément entrant. Un cast ne s annule jamais lui-même.
-        // Si la fenêtre est 100% du même élément, l excédent est retiré sur lui-même.
-        float excess = _totalWeight - _windowSize;
-        if (excess > 0f)
+        while (toDistribute > 0.0001f)
         {
-            // Calcule le poids total des autres éléments
-            float othersTotal = 0f;
+            var others = new List<ElementType>();
             foreach (var kvp in _weightCounts)
-                if (kvp.Key != element) othersTotal += kvp.Value;
+                if (kvp.Key != element && kvp.Value > 0f)
+                    others.Add(kvp.Key);
 
-            if (othersTotal > 0f)
-            {
-                // Retire proportionnellement sur chaque autre élément
-                // ET purge les entrées history correspondantes
-                var keys = new System.Collections.Generic.List<ElementType>(_weightCounts.Keys);
-                foreach (ElementType key in keys)
-                {
-                    if (key == element) continue;
-                    float ratio      = _weightCounts[key] / othersTotal;
-                    float toRemove   = excess * ratio;
-                    _weightCounts[key] = Mathf.Max(0f, _weightCounts[key] - toRemove);
-                }
+            if (others.Count == 0) break;
 
-                // Purge history : retire les entrées des autres éléments proportionnellement
-                float remainingExcess = excess;
-                for (int i = 0; i < _history.Count - 1 && remainingExcess > 0f; i++)
-                {
-                    if (_history[i].element == element) continue;
-                    float remove = Mathf.Min(_history[i].weight, remainingExcess);
-                    remainingExcess -= remove;
-                    if (remove >= _history[i].weight)
-                    {
-                        _history.RemoveAt(i);
-                        i--;
-                    }
-                    else
-                    {
-                        _history[i] = new CastEntry(_history[i].element, _history[i].weight - remove);
-                    }
-                }
-            }
-            else
+            float shareEach = toDistribute / others.Count;
+            float leftover  = 0f;
+
+            foreach (ElementType key in others)
             {
-                // Fenêtre 100% même élément — retire l excédent sur lui-même (FIFO)
-                while (_totalWeight > _windowSize && _history.Count > 0)
+                float available = _weightCounts[key];
+                if (available >= shareEach)
                 {
-                    CastEntry old = _history[0];
-                    _history.RemoveAt(0);
-                    _weightCounts[old.element] = Mathf.Max(0f, _weightCounts[old.element] - old.weight);
-                    _totalWeight = Mathf.Max(0f, _totalWeight - old.weight);
+                    _weightCounts[key] -= shareEach;
+                }
+                else
+                {
+                    leftover += shareEach - available;
+                    _weightCounts[key] = 0f;
                 }
             }
 
-            _totalWeight = _windowSize;
+            toDistribute = leftover;
         }
+
+        // 3. Renormalise
+        Renormalize();
+    }
+
+    // =========================================================
+    // RENORMALISATION
+    // =========================================================
+
+    private void Renormalize()
+    {
+        float total = 0f;
+        foreach (var kvp in _weightCounts)
+            total += kvp.Value;
+
+        if (total <= 0f)
+        {
+            InitNeutralWindow();
+            return;
+        }
+
+        float factor = _windowSize / total;
+        var keys = new List<ElementType>(_weightCounts.Keys);
+        foreach (ElementType key in keys)
+            _weightCounts[key] *= factor;
     }
 
     // =========================================================
     // AFFINITÉS
     // =========================================================
 
-    /// <summary>
-    /// Affinité [0..1] d'un élément.
-    /// Fenêtre vide → 1.0 pour Neutral, 0 pour le reste.
-    /// </summary>
     public float GetAffinity(ElementType element)
     {
-        if (_totalWeight <= 0f)
-            return (element == ElementType.Neutral) ? 1f : 0f;
-
         float w = 0f;
         _weightCounts.TryGetValue(element, out w);
-        return w / _totalWeight;
+        return Mathf.Clamp01(w / _windowSize);
     }
 
-    /// <summary>
-    /// Éléments actifs (> 0%), triés par affinité décroissante.
-    /// Retourne une List de ElementAffinityPair pour l'UI.
-    /// </summary>
     public List<ElementAffinityPair> GetActiveAffinities()
     {
         var result = new List<ElementAffinityPair>();
-
         foreach (ElementType t in Enum.GetValues(typeof(ElementType)))
         {
             float aff = GetAffinity(t);
-            if (aff > 0f)
+            if (aff > 0.001f)
                 result.Add(new ElementAffinityPair(t, aff));
         }
-
         result.Sort((a, b) => b.affinity.CompareTo(a.affinity));
         return result;
     }
 
-    /// <summary>Élément le plus présent dans la fenêtre.</summary>
     public ElementType GetDominantElement()
     {
-        if (_totalWeight <= 0f) return ElementType.Neutral;
-
         ElementType dominant = ElementType.Neutral;
-        float       maxAff   = GetAffinity(ElementType.Neutral); // commence avec Neutral
+        float       maxAff   = GetAffinity(ElementType.Neutral);
 
         foreach (ElementType t in Enum.GetValues(typeof(ElementType)))
         {
@@ -225,7 +195,6 @@ public class ElementalSystem : MonoBehaviour
     public int GetElementRank(ElementType element)
     {
         float aff = GetAffinity(element);
-        // §7.4 : Rang 1 > 0% | Rang 2 ≥ 25% | Rang 3 ≥ 50% | Rang 4 ≥ 75% | Rang 5 ≥ 90%
         if (aff <= 0f)   return 0;
         if (aff < 0.25f) return 1;
         if (aff < 0.50f) return 2;
@@ -238,14 +207,8 @@ public class ElementalSystem : MonoBehaviour
     // TITRE MODE
     // =========================================================
 
-    /// <summary>
-    /// Mode de titre actif.
-    /// Dual nécessite hasDualSkillEquipped = true ET 2 éléments ≥ 20%, écart < 10pts.
-    /// </summary>
     public TitleMode GetTitleMode(bool hasDualSkillEquipped = false)
     {
-        if (_totalWeight <= 0f) return TitleMode.Neutral;
-
         ElementType dominant = GetDominantElement();
         float domAff = GetAffinity(dominant);
 
@@ -268,7 +231,6 @@ public class ElementalSystem : MonoBehaviour
         return TitleMode.Equilibriste;
     }
 
-    /// <summary>Éléments éligibles dual (≥ 20%), triés par affinité décroissante.</summary>
     public List<ElementType> GetDualCandidates()
     {
         var result = new List<ElementType>();
@@ -290,7 +252,6 @@ public class ElementalSystem : MonoBehaviour
         int rank = GetElementRank(element);
         TitleMode mode = GetTitleMode();
 
-        // §7.4 : Rang 1=+5% | Rang 2=+10% | Rang 3=+15% | Rang 4=+20% | Rang 5=+25%
         float bonus;
         switch (rank)
         {
@@ -302,20 +263,17 @@ public class ElementalSystem : MonoBehaviour
             default: bonus = 0.00f; break;
         }
 
-        // §7.5 : Dual = 75% du bonus mono sur chaque élément
         if (mode == TitleMode.Dual)
             bonus *= 0.75f;
 
-        // §7.5 : Équilibriste = +5% dégâts sur tous les éléments actifs
         if (mode == TitleMode.Equilibriste && rank > 0)
             bonus += 0.05f;
 
         return 1f + bonus;
     }
 
-    /// <summary>Bonus neutre : +20% si fenêtre 100% neutre.</summary>
     public float GetNeutralBonus()
-        => (_totalWeight <= 0f) ? 1.20f : 1.00f;
+        => GetAffinity(ElementType.Neutral) >= 0.99f ? 1.20f : 1.00f;
 
     // =========================================================
     // VULNÉRABILITÉ
@@ -372,13 +330,13 @@ public class ElementalSystem : MonoBehaviour
     // =========================================================
     // UTILITAIRES
     // =========================================================
+
     public int   GetTotalCasts()   => _totalCasts;
-    public int   GetHistoryCount() => _history.Count;
-    public float GetTotalWeight()  => _totalWeight;
+    public int   GetHistoryCount() => 0;
+    public float GetTotalWeight()  => _windowSize;
     public float GetWindowSize()   => _windowSize;
 }
 
-// ── Struct de retour pour l'UI (plus safe que les tuples nommés) ─
 public struct ElementAffinityPair
 {
     public ElementType element;
