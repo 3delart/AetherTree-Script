@@ -1,31 +1,13 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using System.Collections;
 using System.Collections.Generic;
 
 // =============================================================
-// QUESTTRACKERUI — Tracker HUD (en jeu, affiché en permanence)
-// Path : Assets/Scripts/UI/HUD/QuestTrackerUI.cs
-// AetherTree GDD v31 — §25
-//
-// Affiche les quêtes actives avec leurs objectifs en cours.
-// Se rafraîchit automatiquement via GameEventBus.OnQuestAction
-// et GameEventBus.OnMobKilled (pour la progression des objectifs).
-//
-// Hiérarchie Unity attendue :
-//   QuestTrackerPanel
-//     └── TrackerContent  (VerticalLayoutGroup — les entrées s'empilent ici)
-//
-// Prefabs requis :
-//   questBlockPrefab   — conteneur d'une quête (VerticalLayoutGroup)
-//     ├── QuestName    (TMP)
-//     └── [objectifs instanciés dans ce GO]
-//   objectiveLinePrefab — une ligne d'objectif
-//     ├── Bullet       (Image — rond coloré)
-//     └── ObjectiveText (TMP)
-//
-// Le tracker se cache automatiquement s'il n'y a aucune quête active.
-// Nb de quêtes affichées en même temps : maxDisplayed (défaut 3).
+// QUESTTRACKERUI — Tracker HUD permanent
+// Path : Assets/Scripts/UI/PanelFixe/QuestTrackerUI.cs
+// AetherTree GDD v3.1 — §25
 // =============================================================
 
 public class QuestTrackerUI : MonoBehaviour
@@ -37,16 +19,30 @@ public class QuestTrackerUI : MonoBehaviour
     public GameObject questBlockPrefab;
     public GameObject objectiveLinePrefab;
 
+    [Header("Bouton réduire / agrandir")]
+    [Tooltip("Bouton QuestButtonReduc dans QuestTitlePanel")]
+    public Button reduceButton;
+    [Tooltip("Texte du bouton (optionnel — affiche − ou +)")]
+    public TextMeshProUGUI reduceButtonText;
+
     [Header("Paramètres")]
-    [Tooltip("Nombre max de quêtes affichées simultanément dans le tracker.")]
     public int maxDisplayed = 3;
 
-    // Couleurs bullets
-    private static readonly Color BULLET_DONE    = new Color(0.3f, 0.9f,  0.4f);
+    [Header("Message vide (optionnel)")]
+    public string emptyMessage = "";
+
+    // État réduit
+    private bool _isReduced = false;
+
+    // Suivi manuel
+    private readonly HashSet<string> _trackedQuestIDs = new HashSet<string>();
+
+    private static readonly Color BULLET_DONE    = new Color(0.3f,  0.9f,  0.4f);
     private static readonly Color BULLET_PENDING = new Color(0.65f, 0.65f, 0.75f);
 
     private readonly List<GameObject> _blocks = new List<GameObject>();
-    private bool _dirty = true;  // true = refresh nécessaire au prochain Update
+    private bool _dirty       = true;
+    private bool _initialized = false;
 
     // =========================================================
     private void Awake()
@@ -59,6 +55,20 @@ public class QuestTrackerUI : MonoBehaviour
     {
         GameEventBus.OnQuestAction += OnQuestAction;
         GameEventBus.OnMobKilled   += OnMobKilled;
+
+        if (reduceButton != null)
+            reduceButton.onClick.AddListener(ToggleReduce);
+
+        UpdateReduceButtonText();
+        StartCoroutine(InitDelayed());
+    }
+
+    private IEnumerator InitDelayed()
+    {
+        yield return null;
+        yield return null;
+        _initialized = true;
+        _dirty = false;
         Refresh();
     }
 
@@ -68,57 +78,146 @@ public class QuestTrackerUI : MonoBehaviour
         GameEventBus.OnMobKilled   -= OnMobKilled;
     }
 
-    // Marque dirty à chaque événement quête ou kill pour éviter
-    // de rebuilder le tracker à chaque frame d'une salve de kills.
-    private void OnQuestAction(QuestEvent e) => _dirty = true;
+    private void OnQuestAction(QuestEvent e)
+    {
+        if (e.quest != null &&
+            (e.action == QuestAction.TurnedIn || e.action == QuestAction.Failed))
+            _trackedQuestIDs.Remove(e.quest.questID);
+        _dirty = true;
+    }
+
     private void OnMobKilled(MobKilledEvent e) => _dirty = true;
 
     private void Update()
     {
-        if (!_dirty) return;
+        if (!_initialized || !_dirty) return;
         _dirty = false;
         Refresh();
     }
 
     // =========================================================
-    // REFRESH COMPLET
+    // TOGGLE RÉDUIRE / AGRANDIR
+    // =========================================================
+
+    public void ToggleReduce()
+    {
+        _isReduced = !_isReduced;
+
+        // Cache ou affiche tous les blocs — TrackerContent reste toujours actif
+        foreach (var block in _blocks)
+            if (block != null) block.SetActive(!_isReduced);
+
+        UpdateReduceButtonText();
+    }
+
+    private void UpdateReduceButtonText()
+    {
+        if (reduceButtonText == null) return;
+        reduceButtonText.text = _isReduced ? "+" : "−";
+    }
+
+    // =========================================================
+    // API SUIVI
+    // =========================================================
+
+    public bool ToggleTracked(QuestData quest)
+    {
+        if (quest == null || string.IsNullOrEmpty(quest.questID)) return false;
+
+        if (_trackedQuestIDs.Contains(quest.questID))
+        {
+            _trackedQuestIDs.Remove(quest.questID);
+            _dirty = true;
+            return false;
+        }
+
+        if (_trackedQuestIDs.Count >= maxDisplayed)
+        {
+            Debug.Log($"[QuestTracker] Maximum {maxDisplayed} quêtes suivies.");
+            return false;
+        }
+
+        _trackedQuestIDs.Add(quest.questID);
+        _dirty = true;
+        return true;
+    }
+
+    public bool IsTracked(QuestData quest)
+        => quest != null && _trackedQuestIDs.Contains(quest.questID);
+
+    // =========================================================
+    // REFRESH
     // =========================================================
 
     public void Refresh()
     {
-        // Vide les anciens blocs
         foreach (var go in _blocks)
             if (go != null) Destroy(go);
         _blocks.Clear();
 
-        if (QuestSystem.Instance == null || trackerContent == null || questBlockPrefab == null)
+        // TrackerContent toujours visible
+        if (trackerContent != null && !trackerContent.gameObject.activeSelf)
+            trackerContent.gameObject.SetActive(true);
+
+        if (QuestSystem.Instance == null || questBlockPrefab == null)
         {
-            gameObject.SetActive(false);
+            if (!string.IsNullOrEmpty(emptyMessage)) SpawnEmptyMessage();
             return;
         }
 
-        var activeQuests = QuestSystem.Instance.GetActiveQuests();
+        var toDisplay = GetQuestsToDisplay();
 
-        // Cache le tracker s'il n'y a rien à afficher
-        if (activeQuests == null || activeQuests.Count == 0)
+        if (toDisplay.Count == 0)
         {
-            gameObject.SetActive(false);
+            if (!string.IsNullOrEmpty(emptyMessage)) SpawnEmptyMessage();
             return;
         }
 
-        gameObject.SetActive(true);
-
-        int displayed = 0;
-        foreach (var quest in activeQuests)
+        int count = 0;
+        foreach (var quest in toDisplay)
         {
-            if (displayed >= maxDisplayed) break;
+            if (count >= maxDisplayed) break;
+            if (quest == null) continue;
             SpawnQuestBlock(quest);
-            displayed++;
+            count++;
         }
+
+        // Applique l'état réduit aux nouveaux blocs
+        if (_isReduced)
+            foreach (var block in _blocks)
+                if (block != null) block.SetActive(false);
+    }
+
+    public void ForceRefresh()
+    {
+        if (!_initialized) return;
+        _dirty = false;
+        Refresh();
     }
 
     // =========================================================
-    // SPAWN UN BLOC DE QUÊTE
+    // QUÊTES À AFFICHER
+    // =========================================================
+
+    private List<QuestData> GetQuestsToDisplay()
+    {
+        var allActive = QuestSystem.Instance.GetActiveQuests();
+        if (allActive == null) return new List<QuestData>();
+
+        if (_trackedQuestIDs.Count > 0)
+        {
+            var tracked = new List<QuestData>();
+            foreach (var q in allActive)
+                if (q != null && _trackedQuestIDs.Contains(q.questID))
+                    tracked.Add(q);
+            return tracked;
+        }
+
+        return allActive;
+    }
+
+    // =========================================================
+    // SPAWN
     // =========================================================
 
     private void SpawnQuestBlock(QuestData quest)
@@ -128,7 +227,6 @@ public class QuestTrackerUI : MonoBehaviour
         var block = Instantiate(questBlockPrefab, trackerContent);
         _blocks.Add(block);
 
-        // Nom de la quête
         var nameText = block.transform.Find("QuestName")?.GetComponent<TextMeshProUGUI>()
                     ?? block.GetComponentInChildren<TextMeshProUGUI>();
         if (nameText != null)
@@ -137,71 +235,65 @@ public class QuestTrackerUI : MonoBehaviour
             nameText.color = RankColor(quest.questRank);
         }
 
-        // Objectifs actifs uniquement
         if (objectiveLinePrefab == null || quest.objectives == null) return;
 
         var activeIndices = quest.GetActiveObjectiveIndices();
-
-        // Si tous les objectifs sont actifs en même temps (parallèle),
-        // on affiche aussi les objectifs déjà complétés pour garder le contexte
-        bool showAll = !quest.objectivesInOrder;
-
         for (int i = 0; i < quest.objectives.Count; i++)
         {
             var obj = quest.objectives[i];
             if (obj == null) continue;
-
-            // En mode séquentiel : on n'affiche que les actifs + les complétés récents
-            if (quest.objectivesInOrder && !activeIndices.Contains(i) && !obj.IsComplete)
-                continue;
-
+            if (quest.objectivesInOrder && !activeIndices.Contains(i) && !obj.IsComplete) continue;
             SpawnObjectiveLine(block.transform, obj);
         }
     }
 
-    // =========================================================
-    // SPAWN UNE LIGNE D'OBJECTIF
-    // =========================================================
-
     private void SpawnObjectiveLine(Transform parent, QuestObjective obj)
     {
+        if (objectiveLinePrefab == null) return;
+
         var line = Instantiate(objectiveLinePrefab, parent);
 
-        // Bullet coloré
         var bullet = line.transform.Find("Bullet")?.GetComponent<Image>();
         if (bullet != null)
             bullet.color = obj.IsComplete ? BULLET_DONE : BULLET_PENDING;
 
-        // Texte principal
         var txt = line.transform.Find("ObjectiveText")?.GetComponent<TextMeshProUGUI>()
                ?? line.GetComponentInChildren<TextMeshProUGUI>();
-
         if (txt != null)
         {
-            // Construit le texte : description + progression si > 1
             string label = obj.description;
-            if (obj.requiredCount > 1)
-                label += $"  {obj.ProgressLabel}";
-
+            if (obj.requiredCount > 1) label += $"  {obj.ProgressLabel}";
             txt.text  = label;
             txt.color = obj.IsComplete
-                ? new Color(0.55f, 0.85f, 0.55f)   // vert complété
-                : new Color(0.85f, 0.85f, 0.90f);  // blanc légèrement bleuté
+                ? new Color(0.55f, 0.85f, 0.55f)
+                : new Color(0.85f, 0.85f, 0.90f);
         }
     }
 
-    // =========================================================
-    // HELPERS
-    // =========================================================
+    private void SpawnEmptyMessage()
+    {
+        if (trackerContent == null || string.IsNullOrEmpty(emptyMessage)) return;
 
+        var go = new GameObject("EmptyMsg", typeof(RectTransform), typeof(TextMeshProUGUI));
+        go.transform.SetParent(trackerContent, false);
+        _blocks.Add(go);
+
+        var tmp      = go.GetComponent<TextMeshProUGUI>();
+        tmp.text      = emptyMessage;
+        tmp.fontSize  = 12f;
+        tmp.color     = new Color(0.5f, 0.5f, 0.6f, 0.8f);
+        tmp.alignment = TextAlignmentOptions.MidlineRight;
+    }
+
+    // =========================================================
     private static Color RankColor(QuestRank rank) => rank switch
     {
-        QuestRank.Main      => new Color(1.0f, 0.85f, 0.2f),   // or
-        QuestRank.Secondary => new Color(0.85f, 0.90f, 1.0f),  // bleu clair
-        QuestRank.Daily     => new Color(0.6f, 0.95f, 0.65f),  // vert
-        QuestRank.Guild     => new Color(0.9f, 0.65f, 1.0f),   // violet
-        QuestRank.Event     => new Color(1.0f, 0.65f, 0.35f),  // orange
-        QuestRank.Hidden    => new Color(0.75f, 0.75f, 0.8f),  // gris
+        QuestRank.Main      => new Color(1.0f, 0.85f, 0.2f),
+        QuestRank.Secondary => new Color(0.85f, 0.90f, 1.0f),
+        QuestRank.Daily     => new Color(0.6f,  0.95f, 0.65f),
+        QuestRank.Guild     => new Color(0.9f,  0.65f, 1.0f),
+        QuestRank.Event     => new Color(1.0f,  0.65f, 0.35f),
+        QuestRank.Hidden    => new Color(0.75f, 0.75f, 0.8f),
         _                   => Color.white
     };
 }

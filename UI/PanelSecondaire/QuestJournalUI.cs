@@ -171,15 +171,25 @@ public class QuestJournalUI : MonoBehaviour
         var go = Instantiate(questEntryPrefab, questListContent);
         _entryObjects.Add(go);
 
+        // ── RankColor ─────────────────────────────────────────────
         var rankColorImg = go.transform.Find("RankColor")?.GetComponent<Image>();
-        if (rankColorImg != null) rankColorImg.color = RankColor(quest.questRank, 1f);
+        if (rankColorImg != null)
+            rankColorImg.color = RankColor(quest.questRank, 1f);
 
+        // ── QuestName ─────────────────────────────────────────────
         var nameText = go.transform.Find("QuestName")?.GetComponent<TextMeshProUGUI>();
-        if (nameText != null) nameText.text = quest.questName;
+        if (nameText != null)
+            nameText.text = quest.questName;
 
+        // ── QuestRank ─────────────────────────────────────────────
         var rankText = go.transform.Find("QuestRank")?.GetComponent<TextMeshProUGUI>();
-        if (rankText != null) { rankText.text = RankLabel(quest.questRank); rankText.color = RankColor(quest.questRank, 0.85f); }
+        if (rankText != null)
+        {
+            rankText.text  = RankLabel(quest.questRank);
+            rankText.color = RankColor(quest.questRank, 0.85f);
+        }
 
+        // ── Fond — surlignage si sélectionnée ────────────────────
         var rootImg = go.GetComponent<Image>();
         if (rootImg != null)
             rootImg.color = (_selectedQuest == quest)
@@ -188,19 +198,32 @@ public class QuestJournalUI : MonoBehaviour
 
         var captured = quest;
 
+        // ── ButtonSuivis ──────────────────────────────────────────
         var suiviBtn = go.transform.Find("ButtonSuivis")?.GetComponent<Button>();
         if (suiviBtn != null)
         {
+            // Couleur selon état de suivi
+            bool tracked = QuestTrackerUI.Instance?.IsTracked(captured) ?? false;
+            var suiviBtnImg = suiviBtn.GetComponent<Image>();
+            if (suiviBtnImg != null)
+                suiviBtnImg.color = tracked
+                    ? new Color(0.35f, 0.75f, 0.35f) // vert = suivi
+                    : new Color(0.25f, 0.25f, 0.35f); // gris = non suivi
+
+            // Listener
             suiviBtn.onClick.RemoveAllListeners();
             suiviBtn.onClick.AddListener(() => OnSuiviClicked(captured));
+
+            // Bloque la remontée du clic vers rootBtn
             var trigger = suiviBtn.gameObject.GetComponent<EventTrigger>()
-                       ?? suiviBtn.gameObject.AddComponent<EventTrigger>();
+                    ?? suiviBtn.gameObject.AddComponent<EventTrigger>();
             trigger.triggers.Clear();
-            var entry = new EventTrigger.Entry { eventID = EventTriggerType.PointerClick };
-            entry.callback.AddListener((_) => { });
-            trigger.triggers.Add(entry);
+            var triggerEntry = new EventTrigger.Entry { eventID = EventTriggerType.PointerClick };
+            triggerEntry.callback.AddListener((_) => { });
+            trigger.triggers.Add(triggerEntry);
         }
 
+        // ── rootBtn → affiche le détail ───────────────────────────
         var rootBtn = go.GetComponent<Button>();
         if (rootBtn != null)
         {
@@ -208,12 +231,23 @@ public class QuestJournalUI : MonoBehaviour
             rootBtn.onClick.AddListener(() => OnEntryClicked(captured));
         }
 
+        // ── Indicateur complétée ──────────────────────────────────
         bool isComplete = QuestSystem.Instance?.GetQuestState(quest) == QuestState.Completed;
-        if (nameText != null && isComplete) nameText.text = $"✓ {quest.questName}";
+        if (nameText != null && isComplete)
+            nameText.text = $"✓ {quest.questName}";
     }
-
     private void OnEntryClicked(QuestData quest) { _selectedQuest = quest; ShowDetail(quest); RefreshList(); }
-    private void OnSuiviClicked(QuestData quest) { Debug.Log($"[QUEST] Suivi : {quest.questName}"); }
+    private void OnSuiviClicked(QuestData quest)
+    {
+        if (quest == null || QuestTrackerUI.Instance == null) return;
+    
+        bool isNowTracked = QuestTrackerUI.Instance.ToggleTracked(quest);
+    
+        // Met à jour le visuel du bouton dans la liste
+        RefreshList();
+    
+        Debug.Log($"[QUEST] Suivi {quest.questName} : {(isNowTracked ? "activé ✓" : "désactivé")}");
+    }
 
     // =========================================================
     // DÉTAIL
