@@ -6,27 +6,13 @@ using TMPro;
 
 // =============================================================
 // TARGETPANEL.CS — Panel secondaire — Affichage de la cible
-// AetherTree GDD v21
-// =============================================================
-// SETUP HIERARCHY :
-//   TargetPanel
-//     ├── TargetNamePanel
-//     │     ├── TargetName       (TMP)
-//     │     ├── TargetLevel      (TMP)
-//     │     └── TargetIcon       (Image)
-//     ├── TargetHPBar            (Slider)
-//     ├── TargetMPBar            (Slider)
-//     └── StatusEffectMobs       (Transform — icônes buffs/debuffs)
-//
-// CLIC DROIT → ouvre DetailWindow via DetailWindowManager
-// Appelé par TargetingSystem : SetTarget(entity) / ClearTarget()
+// AetherTree GDD v21 — v3.1 : ajout ShowNode(ResourceNode)
 // =============================================================
 
 public class TargetPanel : MonoBehaviour, IPointerClickHandler
 {
     public static TargetPanel Instance { get; private set; }
 
-    // ── Références UI ─────────────────────────────────────────
     [Header("Identité")]
     public Image           targetIcon;
     public TextMeshProUGUI targetNameText;
@@ -38,11 +24,11 @@ public class TargetPanel : MonoBehaviour, IPointerClickHandler
 
     [Header("Effets (container HorizontalLayoutGroup)")]
     public Transform       statusEffectContainer;
-    [Tooltip("Prefab icône effet — même prefab que PlayerInfosPanel")]
     public GameObject      effectIconPrefab;
 
     // ── Runtime ──────────────────────────────────────────────
-    private Entity _currentTarget;
+    private Entity       _currentTarget;
+    private ResourceNode _currentNode;   // ← nouveau
     private Dictionary<string, StatusEffectIcon> _activeIcons = new Dictionary<string, StatusEffectIcon>();
 
     // ─────────────────────────────────────────────────────────
@@ -55,6 +41,9 @@ public class TargetPanel : MonoBehaviour, IPointerClickHandler
 
     private void Update()
     {
+        // Node sélectionné — pas de barres à mettre à jour
+        if (_currentNode != null) return;
+
         if (_currentTarget == null || _currentTarget.isDead)
         {
             ClearTarget();
@@ -65,22 +54,18 @@ public class TargetPanel : MonoBehaviour, IPointerClickHandler
     }
 
     // =========================================================
-    // API PUBLIQUE — appelée par TargetingSystem
+    // API — ENTITY
     // =========================================================
 
     public void SetTarget(Entity target)
     {
-        // Clear les icônes de l'ancienne cible
+        ClearNodeDisplay();
         foreach (var kvp in _activeIcons) Destroy(kvp.Value.gameObject);
         _activeIcons.Clear();
 
         _currentTarget = target;
 
-        if (target == null)
-        {
-            gameObject.SetActive(false);
-            return;
-        }
+        if (target == null) { gameObject.SetActive(false); return; }
 
         gameObject.SetActive(true);
         RefreshIdentity();
@@ -91,36 +76,70 @@ public class TargetPanel : MonoBehaviour, IPointerClickHandler
     public void ClearTarget()
     {
         _currentTarget = null;
+        _currentNode   = null;
         foreach (var kvp in _activeIcons) Destroy(kvp.Value.gameObject);
         _activeIcons.Clear();
         gameObject.SetActive(false);
     }
 
-    // Alias — compatibilité TargetingSystem
     public void Show(Entity target) => SetTarget(target);
     public void Hide()              => ClearTarget();
 
     // =========================================================
-    // REFRESH
+    // API — RESOURCE NODE (nouveau v3.1)
+    // =========================================================
+
+    /// <summary>Affiche les infos d'un ResourceNode dans le TargetPanel.</summary>
+    public void ShowNode(ResourceNode node)
+    {
+        if (node == null) { ClearTarget(); return; }
+
+        // Cache les barres HP/MP — pas pertinentes pour un node
+        ClearEntityDisplay();
+        _currentNode   = node;
+        _currentTarget = null;
+
+        gameObject.SetActive(true);
+
+        if (targetNameText  != null)
+            targetNameText.text  = node.data?.resourceName ?? "Ressource";
+
+        if (targetLevelText != null)
+            targetLevelText.text = node.data?.resourceType.ToString() ?? "";
+
+        if (targetIcon != null)
+        {
+            targetIcon.sprite = node.data?.icon;
+            targetIcon.color  = node.data?.icon != null
+                ? Color.white
+                : new Color(0.6f, 0.85f, 0.3f, 1f); // vert si pas d'icône
+        }
+
+        // Cache les barres HP/MP
+        if (hpBar != null) hpBar.gameObject.SetActive(false);
+        if (mpBar != null) mpBar.gameObject.SetActive(false);
+    }
+
+    // =========================================================
+    // REFRESH — ENTITY
     // =========================================================
 
     private void RefreshIdentity()
     {
         if (_currentTarget == null) return;
 
-        // Nom
         if (targetNameText != null)
             targetNameText.text = _currentTarget.entityName;
 
-        // Niveau + Icône selon le type d'entité
-        Mob mob = _currentTarget as Mob;
+        Mob    mob    = _currentTarget as Mob;
         Player player = _currentTarget as Player;
+        PNJ    pnj    = _currentTarget as PNJ;
 
         if (targetLevelText != null)
         {
-            if (mob    != null) targetLevelText.text = $"Niv. {mob.mobLevel}";
+            if      (mob    != null) targetLevelText.text = $"Niv. {mob.mobLevel}";
             else if (player != null) targetLevelText.text = $"Niv. {player.level}";
-            else targetLevelText.text = "";
+            else                     targetLevelText.text = "";
         }
 
         if (targetIcon != null)
@@ -128,49 +147,22 @@ public class TargetPanel : MonoBehaviour, IPointerClickHandler
             targetIcon.sprite = null;
             targetIcon.color  = new Color(0.3f, 0.3f, 0.3f, 1f);
 
-            if (mob != null && mob.data?.portrait != null)
-            {
-                targetIcon.sprite = mob.data.portrait;
-                targetIcon.color  = Color.white;
-            }
-            else if (player != null && player.characterData?.portrait != null)
-            {
-                targetIcon.sprite = player.characterData.portrait;
-                targetIcon.color  = Color.white;
-            }
-            // ── AJOUTER CES LIGNES ──
-            else
-            {
-                PNJ pnj = _currentTarget as PNJ;
-                if (pnj != null && pnj.data?.portrait != null)
-                {
-                    targetIcon.sprite = pnj.data.portrait;
-                    targetIcon.color  = Color.white;
-                }
-            }
+            if      (mob    != null && mob.data?.portrait    != null) { targetIcon.sprite = mob.data.portrait;    targetIcon.color = Color.white; }
+            else if (player != null && player.characterData?.portrait != null) { targetIcon.sprite = player.characterData.portrait; targetIcon.color = Color.white; }
+            else if (pnj    != null && pnj.data?.portrait    != null) { targetIcon.sprite = pnj.data.portrait;    targetIcon.color = Color.white; }
         }
+
+        // Réaffiche les barres HP/MP pour les entités
+        if (hpBar != null) hpBar.gameObject.SetActive(true);
+        if (mpBar != null) mpBar.gameObject.SetActive(true);
     }
 
     private void RefreshBars()
     {
         if (_currentTarget == null) return;
-
-        if (hpBar != null)
-        {
-            hpBar.maxValue = _currentTarget.MaxHP;
-            hpBar.value    = _currentTarget.CurrentHP;
-        }
-
-        if (mpBar != null)
-        {
-            mpBar.maxValue = _currentTarget.MaxMana;
-            mpBar.value    = _currentTarget.CurrentMana;
-        }
+        if (hpBar != null) { hpBar.maxValue = _currentTarget.MaxHP;   hpBar.value = _currentTarget.CurrentHP; }
+        if (mpBar != null) { mpBar.maxValue = _currentTarget.MaxMana; mpBar.value = _currentTarget.CurrentMana; }
     }
-
-    // =========================================================
-    // STATUS EFFECTS
-    // =========================================================
 
     private void RefreshEffects()
     {
@@ -179,13 +171,12 @@ public class TargetPanel : MonoBehaviour, IPointerClickHandler
 
         var effects = _currentTarget.statusEffects.GetActiveEffectsForUI();
 
-        // Ajouter les nouveaux effets
         foreach (var entry in effects)
         {
             if (!_activeIcons.ContainsKey(entry.key))
             {
-                var go = Instantiate(effectIconPrefab, statusEffectContainer);
-                go.name = entry.key;
+                var go   = Instantiate(effectIconPrefab, statusEffectContainer);
+                go.name  = entry.key;
                 var icon = go.GetComponent<StatusEffectIcon>() ?? go.AddComponent<StatusEffectIcon>();
                 icon.Setup(entry, entry.isDebuff
                     ? new UnityEngine.Color(0.8f, 0.1f, 0.1f)
@@ -193,33 +184,40 @@ public class TargetPanel : MonoBehaviour, IPointerClickHandler
                 _activeIcons[entry.key] = icon;
             }
             else
-            {
                 _activeIcons[entry.key].UpdateDisplay(entry.remainingTime, entry.totalDuration);
-            }
         }
 
-        // Supprimer les effets expirés
         var toRemove = new List<string>();
         foreach (var kvp in _activeIcons)
             if (!effects.Exists(e => e.key == kvp.Key)) toRemove.Add(kvp.Key);
-
-        foreach (var key in toRemove)
-        {
-            Destroy(_activeIcons[key].gameObject);
-            _activeIcons.Remove(key);
-        }
+        foreach (var key in toRemove) { Destroy(_activeIcons[key].gameObject); _activeIcons.Remove(key); }
     }
 
     // =========================================================
-    // CLIC DROIT — ouvre DetailWindow
+    // HELPERS
+    // =========================================================
+
+    private void ClearNodeDisplay()
+    {
+        _currentNode = null;
+        if (hpBar != null) hpBar.gameObject.SetActive(true);
+        if (mpBar != null) mpBar.gameObject.SetActive(true);
+    }
+
+    private void ClearEntityDisplay()
+    {
+        foreach (var kvp in _activeIcons) Destroy(kvp.Value.gameObject);
+        _activeIcons.Clear();
+    }
+
+    // =========================================================
+    // CLIC DROIT
     // =========================================================
 
     public void OnPointerClick(PointerEventData eventData)
     {
         if (eventData.button != PointerEventData.InputButton.Right) return;
-        if (_currentTarget == null) return;
-
-        // TODO : DetailWindowManager.Instance.OpenTargetDetail(_currentTarget);
-        Debug.Log($"[TargetPanel] Clic droit → DetailWindow pour {_currentTarget.entityName} (non implémenté)");
+        if (_currentTarget == null && _currentNode == null) return;
+        Debug.Log($"[TargetPanel] Clic droit → DetailWindow (non implémenté)");
     }
 }

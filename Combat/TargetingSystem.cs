@@ -25,6 +25,7 @@ public class TargetingSystem : MonoBehaviour
     public Color colorEngaged  = new Color(1f, 0f,   0f); // Rouge
 
     private Entity selectedTarget;
+    private ResourceNode selectedNode;
     private Entity engagedTarget;
     private Outline selectedOutline;
     private Outline engagedOutline;
@@ -99,6 +100,29 @@ public class TargetingSystem : MonoBehaviour
 
         if (hit.collider.CompareTag("Ground")) { Deselect(); return; }
 
+
+        // ── ResourceNode — collecte ───────────────────────────
+        ResourceNode node = hit.collider.GetComponentInParent<ResourceNode>();
+        if (node != null)
+        {
+            if (selectedNode == node)
+            {
+                // Deuxième clic → collecte
+                float dist = Vector3.Distance(player.transform.position, node.transform.position);
+                if (dist <= (node.data?.interactionRadius ?? 2.5f))
+                    node.BeginCollect(player);
+                else
+                    ResourceApproach.Instance?.ApproachNode(node, player);
+            }
+            else
+            {
+                // Premier clic → sélection + TargetPanel
+                SelectNode(node);
+            }
+            return;
+        }
+
+
         Entity entity = hit.collider.GetComponentInParent<Entity>();
         if (entity == null || entity == player) { Deselect(); return; }
 
@@ -128,11 +152,16 @@ public class TargetingSystem : MonoBehaviour
             return;
         }
 
+        
+
         // ── Mob / Boss — flow combat normal ───────────────────
         if (entity == selectedTarget && engagedTarget != entity)
             Engage(entity);
         else
             Select(entity);
+
+        
+        
     }
 
     public void Select(Entity entity)
@@ -276,6 +305,7 @@ public class TargetingSystem : MonoBehaviour
         engagedTarget   = null;
         selectedOutline = null;
         engagedOutline  = null;
+        selectedNode = null;
         autoAttacking   = false;
 
         // Annule l'approche PNJ en cours
@@ -286,6 +316,12 @@ public class TargetingSystem : MonoBehaviour
         }
 
         TargetPanel.Instance?.Hide();
+    }
+
+    public void SelectNode(ResourceNode node)
+    {
+        selectedNode = node;
+        TargetPanel.Instance?.ShowNode(node);
     }
 
     public Entity GetEngagedTarget()  => engagedTarget;
