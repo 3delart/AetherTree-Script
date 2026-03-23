@@ -706,7 +706,7 @@ public class UnlockManager : MonoBehaviour
                 records[id] = new UnlockRecord { conditionID = id };
     }
 
-    private bool IsNight() => false; // TODO : brancher système jour/nuit
+    private bool IsNight() => DayNightCycle.Instance?.IsNight ?? false;
 
     // =========================================================
     // EDITOR — AUTO-REMPLISSAGE
