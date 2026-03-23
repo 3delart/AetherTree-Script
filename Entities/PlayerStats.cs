@@ -21,14 +21,16 @@ using UnityEngine;
 //   Pour les BasicAttack (pas de SkillData) → GetDefenseForCategory(WeaponCategory)
 //
 // Slots contributeurs (GDD v30 section 5.1) :
-//   Arme    → baseAttackMin/Max, attackGrade, precision, critChance, critDamage
-//   Armure  → meleeDefense, rangedDefense, magicDefense, defenseGrade, dodge
-//   Casque  → toutes stats via List<StatBonus>
-//   Gants   → défenses fixes SO + résistances instance + List<StatBonus>
-//   Bottes  → défenses fixes SO + résistances instance + List<StatBonus>
-//   Bijoux  → défenses fixes SO + List<StatBonus>
-//   Runes   → slots sur arme + armure via List<StatBonus>
-//   Esprits → points élémentaires cumulés + paliers via List<StatBonus>
+//   Arme        → baseAttackMin/Max, attackGrade, precision, critChance, critDamage
+//   Armure      → meleeDefense, rangedDefense, magicDefense, defenseGrade, dodge
+//   Casque      → toutes stats via List<StatBonus>
+//   Gants       → défenses fixes SO + résistances instance + List<StatBonus>
+//   Bottes      → défenses fixes SO + résistances instance + List<StatBonus>
+//   Bijoux      → défenses fixes SO + List<StatBonus>
+//   Runes       → slots sur arme + armure via List<StatBonus>
+//   Esprits     → points élémentaires cumulés + paliers via List<StatBonus>
+//   Permanents  → List<StatBonus> + List<DebuffResistanceEntry>
+//                 (OnHitEffects gérés dans Player.ApplyOnHitEffects)
 // =============================================================
 
 public class PlayerStats
@@ -102,7 +104,7 @@ public class PlayerStats
 
     /// <summary>
     /// Résistances élémentaires [0..1] par élément.
-    /// Agrège : gants/bottes (instance), casque/bijoux/runes (StatBonus).
+    /// Agrège : gants/bottes (instance), casque/bijoux/runes/permanents (StatBonus).
     /// CombatSystem étape ⑥. GDD v30 section 6.1.
     /// </summary>
     public Dictionary<ElementType, float> elementalResistances { get; private set; }
@@ -114,7 +116,7 @@ public class PlayerStats
 
     /// <summary>
     /// Points élémentaires d'équipement par élément.
-    /// Agrège : esprits (cumulés au niveau) + paliers + casque/bijoux/runes (StatBonus).
+    /// Agrège : esprits (cumulés au niveau) + paliers + casque/bijoux/runes/permanents (StatBonus).
     /// S'ajoute aux points d'affinité de ElementalSystem.
     /// CombatSystem étape ⑥. GDD v30 section 6.1.
     /// </summary>
@@ -135,7 +137,7 @@ public class PlayerStats
     /// <summary>
     /// Multiplicateurs sur les points élémentaires [0..1+].
     /// Appliqués après tous les points flat.
-    /// Source : paliers d'esprits, runes, bijoux spéciaux.
+    /// Source : paliers d'esprits, runes, bijoux spéciaux, permanents.
     /// </summary>
     public Dictionary<ElementType, float> elementalPointsMultipliers { get; private set; }
         = new Dictionary<ElementType, float>();
@@ -173,6 +175,11 @@ public class PlayerStats
         ApplyRunes(player.equippedWeaponInstance, player.equippedArmorInstance);
         ApplySpirits(player.equippedSpiritInstances);
 
+        // ── Skills permanents — StatBonus définitifs ──────────
+        // OnHitEffects des permanents sont gérés dans Player.ApplyOnHitEffects().
+        // DebuffResistances des permanents sont gérées dans ApplyDebuffResistances().
+        ApplyPermanentSkills(player.unlockedPermanents);
+
         // Applique les multiplicateurs sur les points élémentaires
         foreach (ElementType e in System.Enum.GetValues(typeof(ElementType)))
             if (elementalPointsMultipliers[e] > 0f)
@@ -205,6 +212,7 @@ public class PlayerStats
 
     // =========================================================
     // RÉSISTANCES AUX DEBUFFS
+    // Agrège : équipements + skills permanents
     // =========================================================
 
     private void ApplyDebuffResistances(Player player)
@@ -213,8 +221,9 @@ public class PlayerStats
 
         player.statusEffects.ResetDebuffResistances();
 
-        var allResistances = new System.Collections.Generic.List<System.Collections.Generic.List<DebuffResistanceEntry>>();
+        var allResistances = new List<List<DebuffResistanceEntry>>();
 
+        // ── Équipements ───────────────────────────────────────
         if (player.equippedWeaponInstance?.data != null && player.equippedWeaponInstance.DebuffResistances != null)
             allResistances.Add(player.equippedWeaponInstance.DebuffResistances);
         if (player.equippedArmorInstance?.data != null && player.equippedArmorInstance.DebuffResistances != null)
@@ -230,7 +239,14 @@ public class PlayerStats
                 if (jewelry?.DebuffResistances != null)
                     allResistances.Add(jewelry.DebuffResistances);
 
-        var accumulated = new System.Collections.Generic.Dictionary<DebuffType, float>();
+        // ── Skills permanents ─────────────────────────────────
+        if (player.unlockedPermanents != null)
+            foreach (var p in player.unlockedPermanents)
+                if (p?.debuffResistances != null && p.debuffResistances.Count > 0)
+                    allResistances.Add(p.debuffResistances);
+
+        // ── Accumulation + application ────────────────────────
+        var accumulated = new Dictionary<DebuffType, float>();
         foreach (var list in allResistances)
         {
             if (list == null) continue;
@@ -243,10 +259,7 @@ public class PlayerStats
         }
 
         foreach (var kvp in accumulated)
-        {
             player.statusEffects.SetDebuffResistance(kvp.Key, Mathf.Clamp01(kvp.Value));
-            Debug.Log($"[PlayerStats] Résistance {kvp.Key} : {Mathf.Clamp01(kvp.Value):P0}");
-        }
     }
 
     // =========================================================
@@ -289,9 +302,6 @@ public class PlayerStats
         if (weapon == null)
         {
             // Sans arme : Coup de poing — scale avec le niveau du joueur
-            // Formule : dmgMin = 2 + level * 0.5 | dmgMax = 4 + level * 1.0
-            // Ex: Lv1 → 2-5 | Lv10 → 7-14 | Lv50 → 27-54 | Lv100 → 52-104
-            // attackGrade plafonné à 6 — mains nues restent moins efficaces qu'une vraie arme
             float lvl     = player != null ? player.level : 1f;
             baseAttackMin = 2f + lvl * 0.5f;
             baseAttackMax = 4f + lvl * 1.0f;
@@ -443,6 +453,23 @@ public class PlayerStats
     }
 
     // =========================================================
+    // PERMANENTS — Skills passifs définitifs
+    // StatBonus uniquement — DebuffResistances dans ApplyDebuffResistances()
+    //                       — OnHitEffects dans Player.ApplyOnHitEffects()
+    // =========================================================
+
+    private void ApplyPermanentSkills(List<PermanentSkillData> permanents)
+    {
+        if (permanents == null) return;
+
+        foreach (var p in permanents)
+        {
+            if (p == null) continue;
+            ApplyStatBonusList(p.bonuses);
+        }
+    }
+
+    // =========================================================
     // DISPATCH StatBonus → stats
     // =========================================================
 
@@ -543,7 +570,6 @@ public class PlayerStats
     /// <summary>
     /// Défense pondérée selon les ratios DamageType du skill.
     /// GDD v30 §6.1 — CombatSystem étape ⑤.
-    /// Ex: skill (melee=0.7, magic=0.3) → meleeDefense×0.7 + magicDefense×0.3
     /// </summary>
     public float GetWeightedDefense(SkillData skill)
     {
@@ -561,7 +587,7 @@ public class PlayerStats
         {
             case WeaponCategory.Ranged: return rangedDefense;
             case WeaponCategory.Magic:  return magicDefense;
-            default:                    return meleeDefense; // Melee + Unarmed
+            default:                    return meleeDefense;
         }
     }
 }

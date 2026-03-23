@@ -21,6 +21,9 @@ using System.Collections.Generic;
 //   Ex: skill hybride         → Melee 0.7 / Ranged 0.0 / Magic 0.3
 //   Ex: projectile magique    → Melee 0.0 / Ranged 0.3 / Magic 0.7
 // CombatSystem lit ces ratios pour appliquer la défense pondérée de la cible.
+//
+// ⚠ Les skills permanents (bonus stats définitifs) utilisent PermanentSkillData,
+//   un SO séparé — pas SkillData. SkillType.Permanent a été supprimé.
 // =============================================================
 
 [CreateAssetMenu(fileName = "NewSkill", menuName = "AetherTree/Skills/SkillData")]
@@ -124,8 +127,8 @@ public class SkillData : ScriptableObject
 
     // ── ⑨ Exécution avancée ───────────────────────────────────
     [Header("⑨ Exécution avancée")]
-    [Tooltip("Normal      → exécution standard\n" +
-             "MultiHit    → une activation, N hits en séquence (hitSteps)\n" +
+    [Tooltip("Normal        → exécution standard\n" +
+             "MultiHit      → une activation, N hits en séquence (hitSteps)\n" +
              "ComboSequence → N appuis successifs sur le même slot (comboSteps)")]
     public SkillExecutionType executionType = SkillExecutionType.Normal;
 
@@ -147,8 +150,6 @@ public class SkillData : ScriptableObject
     public Sprite     icon;
     public GameObject vfxPrefab;
     public AudioClip  soundEffect;
-
-    
 
     // ── Helpers ───────────────────────────────────────────────
     public bool        IsNeutral      => elements == null || elements.Count == 0;
@@ -184,9 +185,17 @@ public class SkillData : ScriptableObject
 // =============================================================
 // ENUMS
 // =============================================================
+
+/// <summary>
+/// Type de skill — détermine l'onglet dans SkillLibraryUI et les règles d'équipement.
+/// ⚠ Permanent supprimé — les passifs définitifs utilisent PermanentSkillData (SO séparé).
+/// </summary>
 public enum SkillType
 {
-    BasicAttack, Active, Ultimate, PassiveUtility, Permanent
+    BasicAttack,     // Attaque de base — slot 0 SkillBar uniquement
+    Active,          // Sort actif — slots 1-8 SkillBar
+    Ultimate,        // Ultime — slot 9 SkillBar
+    PassiveUtility,  // Passif utilitaire — slots P1/P2/P3 PassifBar
 }
 
 public enum SkillEffectType

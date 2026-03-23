@@ -127,7 +127,9 @@ public class CharacterProgress
     public List<SavedItem> items = new List<SavedItem>();
 
     // ⑥ Skills débloqués
-    public List<string> unlockedSkillNames = new List<string>();
+    public List<string> unlockedSkillNames      = new List<string>();
+    public List<string> unlockedPermanentNames  = new List<string>(); // PermanentSkillData
+    public List<string> unlockedPassiveNames    = new List<string>(); // PassiveSkillData
 
     // ⑦ Slots SkillBar (0–9)
     public List<SavedSkillSlot> skillBarSlots = new List<SavedSkillSlot>();

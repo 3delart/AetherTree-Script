@@ -202,6 +202,16 @@ public class SaveSystem : MonoBehaviour
         foreach (var skill in player.unlockedSkills)
             if (skill != null) progress.unlockedSkillNames.Add(skill.name);
 
+        // ⑥ Permanents débloqués
+        if (player.unlockedPermanents != null)
+            foreach (var perm in player.unlockedPermanents)
+                if (perm != null) progress.unlockedPermanentNames.Add(perm.name);
+
+        // ⑥ Passifs débloqués
+        if (player.unlockedPassives != null)
+            foreach (var passive in player.unlockedPassives)
+                if (passive != null) progress.unlockedPassiveNames.Add(passive.name);
+
         // ⑦ SkillBar
         if (SkillBar.Instance != null)
             for (int i = 0; i < 10; i++)
@@ -442,6 +452,22 @@ public class SaveSystem : MonoBehaviour
             var skill = FindSOByName<SkillData>(skillName);
             if (skill != null) player.UnlockSkill(skill);
         }
+
+        // ⑥ Permanents débloqués
+        if (p.unlockedPermanentNames != null)
+            foreach (var name in p.unlockedPermanentNames)
+            {
+                var perm = FindSOByName<PermanentSkillData>(name);
+                if (perm != null) player.UnlockPermanent(perm);
+            }
+
+        // ⑥ Passifs débloqués
+        if (p.unlockedPassiveNames != null)
+            foreach (var name in p.unlockedPassiveNames)
+            {
+                var passive = FindSOByName<PassiveSkillData>(name);
+                if (passive != null) player.UnlockPassive(passive);
+            }
 
         // ⑦ SkillBar
         if (SkillBar.Instance != null)

@@ -139,9 +139,27 @@ public abstract class Entity : MonoBehaviour
         if (amount <= 0f) return;
 
         currentHP = Mathf.Max(0f, currentHP - amount);
-
+    
         if (currentHP <= 0f)
-            Die();
+        {
+            // ── OnFatalHit — intercept AVANT Die() ───────────────
+            // Uniquement pour le joueur (Player hérite d'Entity).
+            // PassiveSkillSystem.CanSurviveFatalHit() évalue les passives
+            // OnFatalHit, applique leurs effets, et retourne true si le joueur survit.
+            // Dans ce cas on laisse le joueur à 1 HP sans appeler Die().
+            Player playerSelf = this as Player;
+            if (playerSelf != null &&
+                PassiveSkillSystem.Instance != null &&
+                PassiveSkillSystem.Instance.CanSurviveFatalHit())
+            {
+                currentHP = 1f; // survie à 1 HP
+                // Les effets (Invincible, Push...) sont déjà appliqués par CanSurviveFatalHit()
+            }
+            else
+            {
+                Die();
+            }
+        }
     }
 
     // =========================================================

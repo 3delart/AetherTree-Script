@@ -31,6 +31,13 @@ using System.Collections.Generic;
 //   (physique) puis via conditions in-game (élémentaires).
 //   Le joueur choisit librement laquelle équiper au slot 0 (drag & drop).
 //
+// Flow permanents — GDD §16.2 :
+//   UnlockPermanent(so) → unlockedPermanents + RecalculateStats()
+//   PlayerStats lit unlockedPermanents pour :
+//     ① StatBonus (HP, déf, crit...)
+//     ② DebuffResistances
+//     ③ OnHitEffects (ApplyOnHitEffects)
+//
 // Communication : tout passe par GameEventBus.Publish() — plus aucun
 // appel direct à UnlockManager, XPSystem ou LootManager.
 // =============================================================
@@ -77,8 +84,18 @@ public class Player : Entity
     [HideInInspector] public float moveSpeed = 5f;
 
     // ── Skills ────────────────────────────────────────────────
-    [HideInInspector] public List<SkillData> startingSkills = new List<SkillData>();
-    [HideInInspector] public List<SkillData> unlockedSkills = new List<SkillData>();
+    [HideInInspector] public List<SkillData>          startingSkills     = new List<SkillData>();
+    [HideInInspector] public List<SkillData>          unlockedSkills     = new List<SkillData>();
+
+    // ── Skills permanents — passifs définitifs (stat/onhit/debuffresist)
+    // Débloqués via UnlockPermanent() — jamais retirés.
+    // Lus par PlayerStats.RecalculateStats() à chaque recalcul.
+    [HideInInspector] public List<PermanentSkillData> unlockedPermanents = new List<PermanentSkillData>();
+
+    // ── Skills passifs conditionnels — procs sur événements de combat
+    // Évalués à runtime par PassiveSkillSystem (abonné à GameEventBus).
+    // Ex: survivre à coup fatal, push ennemis à 20% HP perdu, revivre 10%...
+    [HideInInspector] public List<PassiveSkillData> unlockedPassives = new List<PassiveSkillData>();
 
     // ── Progression ───────────────────────────────────────────
     [HideInInspector] public int level         = 1;
@@ -118,6 +135,10 @@ public class Player : Entity
         // Garantit l'initialisation même après désérialisation Unity
         if (equippedJewelryInstances == null)
             equippedJewelryInstances = new List<JewelryInstance>();
+        if (unlockedPermanents == null)
+            unlockedPermanents = new List<PermanentSkillData>();
+        if (unlockedPassives == null)
+            unlockedPassives = new List<PassiveSkillData>();
 
         activityCounter = GetComponent<ActivityCounter>();
         elementalSystem = GetComponent<ElementalSystem>();
@@ -147,10 +168,6 @@ public class Player : Entity
     private void Start()
     {
         // ── 1. BasicAttack de départ — GDD §16.2 niveau 1 ────
-        // Débloquée en premier pour apparaître en tête de la SkillLibrary.
-        // Source : WeaponTypeRegistry → famille de l'arme choisie à la création.
-        // La BasicAttack ne change PAS quand on change d'arme — elle est possédée
-        // comme n'importe quel skill.
         UnlockStartingBasicAttack();
 
         // ── 2. Skills de départ (CharacterData ou fallback Player) ──
@@ -171,7 +188,6 @@ public class Player : Entity
     /// <summary>
     /// Débloque la BasicAttack physique de la famille d'arme de départ.
     /// GDD §16.2 — déblocage automatique niveau 1.
-    /// Source : WeaponTypeRegistry → famille de l'arme équipée au départ.
     /// </summary>
     private void UnlockStartingBasicAttack()
     {
@@ -182,14 +198,13 @@ public class Player : Entity
             return;
         }
 
-        // Le joueur a toujours une arme équipée — choisie à la création (GDD §2.1)
         if (equippedWeapon == null)
         {
             Debug.LogWarning("[PLAYER] Aucune arme équipée au départ — BasicAttack non débloquée. Vérifie characterData.startingWeapon.");
             return;
         }
 
-        WeaponType family     = equippedWeapon.weaponType.GetStartingFamily();
+        WeaponType family      = equippedWeapon.weaponType.GetStartingFamily();
         SkillData  basicAttack = registry.GetBasicAttackSkill(family);
 
         if (basicAttack == null)
@@ -199,7 +214,6 @@ public class Player : Entity
         }
 
         UnlockSkill(basicAttack);
-       
     }
 
     private IEnumerator SetStartingSkillBar()
@@ -208,8 +222,6 @@ public class Player : Entity
         if (SkillBar.Instance == null) yield break;
 
         // ── Slot 0 — BasicAttack de la famille de départ ─────
-        // GDD §8.1 : slot 0 réservé aux BasicAttack.
-        // On place la première BasicAttack débloquée (physique de départ).
         var startingBasicAttack = unlockedSkills.Find(s =>
             s != null && (s.skillType == SkillType.BasicAttack || s.HasTag(SkillTag.BasicAttack)));
 
@@ -220,11 +232,10 @@ public class Player : Entity
         var skills = (characterData != null && characterData.startingSkills.Count > 0)
             ? characterData.startingSkills : startingSkills;
 
-        int slot = 1; // démarre à 1 — slot 0 réservé BasicAttack
+        int slot = 1;
         foreach (var skill in skills)
         {
             if (skill == null) continue;
-            // Saute les BasicAttack — déjà placées au slot 0
             if (skill.skillType == SkillType.BasicAttack || skill.HasTag(SkillTag.BasicAttack)) continue;
 
             if (skill.skillType == SkillType.Ultimate)
@@ -264,6 +275,16 @@ public class Player : Entity
     public void EquipWeapon(WeaponInstance instance)
     {
         if (instance == null) return;
+
+        // GDD §2.3 — catégorie irrévocable
+        if (instance.data != null && instance.Category != weaponCategory)
+        {
+            Debug.LogWarning($"[PLAYER] Arme incompatible — " +
+                            $"{instance.WeaponName} ({instance.Category}) " +
+                            $"ne peut pas être équipée par un joueur {weaponCategory}.");
+            return;
+        }
+
         equippedWeaponInstance = instance;
         stats.RecalculateStats(this);
     }
@@ -273,7 +294,6 @@ public class Player : Entity
         equippedWeaponInstance = null;
         stats.RecalculateStats(this);
         Debug.Log("[PLAYER] Arme déséquipée");
-        // TODO : Publish UnarmedEvent via GameEventBus quand UnarmedEvent migré en struct
     }
 
     public void EquipArmor(ArmorInstance instance)
@@ -350,8 +370,8 @@ public class Player : Entity
     // =========================================================
 
     /// <summary>
-    /// Débloque un skill et l'ajoute à unlockedSkills.
-    /// Appelé par UnlockStartingBasicAttack(), Start(), et UnlockManager.
+    /// Débloque un skill actif/passif et l'ajoute à unlockedSkills.
+    /// Appelé par UnlockStartingBasicAttack(), Start(), et UnlockManager/MailboxSystem.
     /// </summary>
     public void UnlockSkill(SkillData skill)
     {
@@ -360,19 +380,44 @@ public class Player : Entity
         SkillLibraryUI.Instance?.RefreshIfOpen();
     }
 
+    /// <summary>
+    /// Débloque un skill permanent (bonus stats + debuff resist + on-hit).
+    /// Les effets sont appliqués immédiatement via RecalculateStats().
+    /// Un permanent ne peut jamais être retiré.
+    /// Appelé par MailboxSystem.DistributeReward() (RewardType.StatBonus).
+    /// </summary>
+    public void UnlockPermanent(PermanentSkillData permanent)
+    {
+        if (permanent == null || unlockedPermanents.Contains(permanent)) return;
+        unlockedPermanents.Add(permanent);
+        stats.RecalculateStats(this);  // intègre les nouveaux StatBonus + DebuffResistances
+        SkillLibraryUI.Instance?.RefreshIfOpen();
+        Debug.Log($"[PLAYER] Permanent débloqué : {permanent.skillName}");
+    }
+
+    /// <summary>
+    /// Débloque une passive conditionnelle (proc sur événement de combat).
+    /// Évaluée à runtime par PassiveSkillSystem — aucun recalcul de stats.
+    /// Appelé par MailboxSystem.DistributeReward() (RewardType.Passive).
+    /// </summary>
+    public void UnlockPassive(PassiveSkillData passive)
+    {
+        if (passive == null || unlockedPassives.Contains(passive)) return;
+        unlockedPassives.Add(passive);
+        SkillLibraryUI.Instance?.RefreshIfOpen();
+        Debug.Log($"[PLAYER] Passive débloquée : {passive.skillName}");
+    }
+
     // =========================================================
     // DÉGÂTS & MORT
     // =========================================================
 
     public override void TakeDamage(float amount, ElementType sourceElement = ElementType.Neutral, Entity source = null)
     {
-        float hpBefore  = currentHP;
-        string srcName  = source != null ? source.entityName : "inconnu";
+        float hpBefore = currentHP;
 
-        
         base.TakeDamage(amount, sourceElement, source);
 
-        
         activityCounter.Increment("DAMAGE_TAKEN_TOTAL", (int)amount);
 
         // Publish découplé — UnlockManager s'abonne pour les conditions dégâts reçus
@@ -398,6 +443,7 @@ public class Player : Entity
     {
         var allOnHit = new List<List<OnHitEffectEntry>>();
 
+        // ── Équipements ───────────────────────────────────────
         if (equippedWeaponInstance?.data != null) allOnHit.Add(equippedWeaponInstance.OnHitEffects);
         if (equippedArmorInstance?.data  != null) allOnHit.Add(equippedArmorInstance.OnHitEffects);
         if (equippedHelmetInstance?.data != null) allOnHit.Add(equippedHelmetInstance.OnHitEffects);
@@ -406,6 +452,12 @@ public class Player : Entity
         if (equippedJewelryInstances != null)
             foreach (var j in equippedJewelryInstances)
                 if (j?.data != null) allOnHit.Add(j.OnHitEffects);
+
+        // ── Skills permanents ─────────────────────────────────
+        if (unlockedPermanents != null)
+            foreach (var p in unlockedPermanents)
+                if (p?.onHitEffects != null && p.onHitEffects.Count > 0)
+                    allOnHit.Add(p.onHitEffects);
 
         foreach (var list in allOnHit)
         {
@@ -417,7 +469,6 @@ public class Player : Entity
                 switch (entry.effect.effectType)
                 {
                     case OnHitEffectType.Thorns:
-                        // GDD v30 §6.2 slot ④ — pierceDefense non implémenté côté CombatSystem.
                         attacker.TakeDamage(entry.effect.thornsDamage, entry.effect.reflectElement, this);
                         Debug.Log($"[ONHIT] Thorns — {entry.effect.thornsDamage:F0} dmg sur {attacker.entityName}");
                         break;
@@ -458,29 +509,20 @@ public class Player : Entity
     {
         base.Die();
 
-        // Publish découplé — RespawnSystem et UnlockManager s'abonnent
         GameEventBus.Publish(new PlayerDeathEvent
         {
-            cause     = ElementType.Neutral,   // TODO : passer l'élément du dernier coup
-            killer    = null,                   // TODO : tracker le dernier attaquant
+            cause     = ElementType.Neutral,
+            killer    = null,
             hpAtDeath = currentHP,
-            context   = DeathContext.OpenWorld, // TODO : détecter contexte PvP / Donjon
+            context   = DeathContext.OpenWorld,
         });
 
-        // ⚠ Pas de pénalité réputation ici.
-        // RespawnSystem appelle OnOpenWorldDeath() ou OnPvPDeath() selon le contexte.
         RespawnSystem.Instance?.TriggerDeath();
     }
 
     // =========================================================
     // KILLS
     // =========================================================
-
-    // RegisterKill() SUPPRIMÉ — Mob.Die() publie MobKilledEvent via GameEventBus.
-    // UnlockManager, XPSystem, LootManager s'abonnent indépendamment.
-    //
-    // Les compteurs activityCounter (KILLS_TOTAL etc.) sont désormais
-    // mis à jour par un abonnement dans Player.OnEnable() → HandleMobKilled().
 
     private void OnEnable()
     {
@@ -494,11 +536,9 @@ public class Player : Entity
 
     private void HandleMobKilled(MobKilledEvent e)
     {
-        // Ne réagit que si ce joueur est éligible
         if (e.eligiblePlayers == null || !e.eligiblePlayers.Contains(this)) return;
         if (e.mob == null) return;
 
-        // Mise à jour des compteurs locaux
         activityCounter.Increment(CounterKeys.KILLS_TOTAL);
         activityCounter.Increment($"KILLS_{e.mob.elementType.ToString().ToUpper()}_MOB");
         activityCounter.Increment($"KILLS_MOB_{e.mob.mobName.ToUpper().Replace(" ", "_")}");
@@ -510,8 +550,6 @@ public class Player : Entity
     // SKILLS — usage
     // =========================================================
 
-    // Appelé depuis SkillSystem.Execute() AVANT le calcul des dégâts.
-    // NE publie plus EmitSkillCast — SkillSystem.Execute() publie SkillUsedEvent.
     public void UseSkill(SkillData skill, Entity target = null)
     {
         if (skill == null) return;
@@ -519,7 +557,6 @@ public class Player : Entity
 
         if (!skill.IsNeutral)
         {
-            // GDD §7.3 : BasicAttack = 0.25 cast-équivalent | Sort actif = 1.0
             bool isBasic = skill.skillType == SkillType.BasicAttack
                         || skill.HasTag(SkillTag.BasicAttack);
 
@@ -528,7 +565,6 @@ public class Player : Entity
         }
         else
         {
-            // Skill Neutre : enregistre Neutre pour maintenir la fenêtre
             bool isBasic = skill.skillType == SkillType.BasicAttack
                         || skill.HasTag(SkillTag.BasicAttack);
             elementalSystem.RegisterCast(ElementType.Neutral, isBasicAttack: isBasic);
@@ -536,8 +572,6 @@ public class Player : Entity
 
         RefreshTitle();
     }
-
-    // RegisterDamageDealt() SUPPRIMÉ — SkillSystem publie DamageDealtEvent via GameEventBus.
 
     // =========================================================
     // TITRE ACTIF — GDD v21 section 2.3
@@ -608,7 +642,7 @@ public class Player : Entity
             if (pvpReputation >= PvPRepThresholds[i]) { pvpReputationRank = i; break; }
     }
 
-    // GDD v30 §5.6 — Mort monde ouvert (PvE) : −1 worldReputation (pas pvpReputation)
+    // GDD v30 §5.6 — Mort monde ouvert (PvE) : −1 worldReputation
     public void OnOpenWorldDeath() { activityCounter.Increment("DEATHS_OPEN_WORLD"); AddWorldReputation(-1); }
     // GDD v30 §5.6 — Mort en zone PvP monde ouvert : −2 pvpReputation
     public void OnPvPDeath()       { activityCounter.Increment("PVP_DEATHS");        AddPvPReputation(-2); }
@@ -622,8 +656,8 @@ public class Player : Entity
 
     public void OnArenaResult(bool won)
     {
-        if (won) { activityCounter.Increment("ARENA_WINS");         AddPvPReputation(5);  }
-        else     { activityCounter.Increment("ARENA_LOSSES");       AddPvPReputation(-2); }
+        if (won) { activityCounter.Increment("ARENA_WINS");   AddPvPReputation(5);  }
+        else     { activityCounter.Increment("ARENA_LOSSES"); AddPvPReputation(-2); }
     }
 
     public void OnBattlefieldResult(bool won)
@@ -654,17 +688,14 @@ public class Player : Entity
     /// <summary>
     /// Level up — met à jour player.level puis délègue à RecalculateStats().
     /// ⚠ Ne touche PAS directement à maxHP/maxMana/regenHP/regenMana/moveSpeed.
-    /// RecalculateStats() recalcule tout depuis CharacterData + level.
     /// </summary>
     public void OnLevelUp(int newLevel)
     {
         level = newLevel;
         activityCounter.Set("PLAYER_LEVEL", newLevel);
 
-        // RecalculateStats() se charge de maxHP = baseMaxHP + hpPerLevel × (level-1)
         stats.RecalculateStats(this);
 
-        // HP/Mana remplis complètement au level up
         currentHP   = maxHP;
         currentMana = maxMana;
 
@@ -694,6 +725,8 @@ public class Player : Entity
         isDead      = false;
         currentHP   = maxHP   * hpPercent;
         currentMana = maxMana * manaPercent;
+        // Réinitialise les passives "une fois par combat"
+        PassiveSkillSystem.Instance?.ResetCombat();
     }
 
     public void ReviveAtRespawnPoint()
@@ -746,10 +779,10 @@ public class Player : Entity
         GameEventBus.Publish(new MetierEvent { metierID = activityID, actionType = "session_complete", newLevel = 0 });
     }
 
-    public void OnPetCaptured(MobData mob)                   { activityCounter.Increment("PETS_CAPTURED");    GameEventBus.Publish(new PetEvent { action = PetAction.Capture, mob = mob }); }
-    public void OnAnimalCaressed(string id)                  { activityCounter.Increment("ANIMALS_CARESSED"); GameEventBus.Publish(new PetEvent { action = PetAction.Talk, npcID = id }); }
-    public void OnMetierAction(string m, string a, int l=0)  => GameEventBus.Publish(new MetierEvent { metierID = m, actionType = a, newLevel = l });
-    public void OnServerConnect(bool isFirst)                { if (isFirst) activityCounter.Increment("FIRST_ON_SERVER"); GameEventBus.Publish(new ServerEvent { firstConnection = isFirst }); }
+    public void OnPetCaptured(MobData mob)                  { activityCounter.Increment("PETS_CAPTURED");    GameEventBus.Publish(new PetEvent { action = PetAction.Capture, mob = mob }); }
+    public void OnAnimalCaressed(string id)                 { activityCounter.Increment("ANIMALS_CARESSED"); GameEventBus.Publish(new PetEvent { action = PetAction.Talk, npcID = id }); }
+    public void OnMetierAction(string m, string a, int l=0) => GameEventBus.Publish(new MetierEvent { metierID = m, actionType = a, newLevel = l });
+    public void OnServerConnect(bool isFirst)               { if (isFirst) activityCounter.Increment("FIRST_ON_SERVER"); GameEventBus.Publish(new ServerEvent { firstConnection = isFirst }); }
 
     // ── Accesseurs ────────────────────────────────────────────
     public ActivityCounter GetActivityCounter() => activityCounter;

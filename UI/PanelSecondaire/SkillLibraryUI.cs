@@ -345,24 +345,82 @@ public class SkillLibraryUI : MonoBehaviour
     // =========================================================
     // GRILLE DE SKILLS
     // =========================================================
-    private void RefreshGrid()
+private void RefreshGrid()
+{
+    if (skillGridContent == null) return;
+    foreach (Transform child in skillGridContent) Destroy(child.gameObject);
+    if (_player == null) return;
+
+    // ── Onglet Permanents — source différente ─────────────────
+    if (currentTab == SkillLibraryTab.Permanents)
     {
-        if (skillGridContent == null) return;
-
-        foreach (Transform child in skillGridContent)
-            Destroy(child.gameObject);
-
-        if (_player == null) return;
-
-        List<SkillData> skills = GetSkillsForTab();
-        skills = SortByFilterPriority(skills);
-
-        foreach (var skill in skills)
-            SpawnSkillEntry(skill);
-
-        // Forcer le recalcul du layout après spawn
-        UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(skillGridContent as RectTransform);
+        RefreshGridPermanents();
+        return;
     }
+
+    // ── Autres onglets — source unlockedSkills ────────────────
+    List<SkillData> skills = GetSkillsForTab();
+    skills = SortByFilterPriority(skills);
+    foreach (var skill in skills)
+        SpawnSkillEntry(skill);
+
+    LayoutRebuilder.ForceRebuildLayoutImmediate(skillGridContent as RectTransform);
+}
+
+private void RefreshGridPermanents()
+{
+    if (_player?.unlockedPermanents == null) return;
+    foreach (var permanent in _player.unlockedPermanents)
+    {
+        if (permanent == null) continue;
+        SpawnPermanentEntry(permanent);
+    }
+    LayoutRebuilder.ForceRebuildLayoutImmediate(skillGridContent as RectTransform);
+}
+
+private void SpawnPermanentEntry(PermanentSkillData permanent)
+{
+    if (skillEntryPrefab == null) return;
+    var entry = Instantiate(skillEntryPrefab, skillGridContent);
+
+    var img = entry.GetComponent<Image>();
+    if (img != null)
+    {
+        img.sprite = permanent.icon;
+        img.color  = permanent.icon != null ? Color.white : new Color(0.3f, 0.3f, 0.3f, 0.8f);
+    }
+
+    // Tooltip
+    var tooltip = entry.GetComponent<TooltipTrigger>() ?? entry.AddComponent<TooltipTrigger>();
+    // TODO : ShowPermanentTooltip si tu ajoutes un panel dédié dans TooltipSystem
+    // Pour l'instant : description textuelle dans le detail panel au clic
+
+    var btn = entry.GetComponent<Button>();
+    if (btn != null)
+    {
+        var captured = permanent;
+        btn.onClick.AddListener(() => ShowDetailPermanent(captured));
+    }
+}
+
+private void ShowDetailPermanent(PermanentSkillData permanent)
+{
+    if (permanent == null) { ClearDetail(); return; }
+
+    if (detailIcon    != null) { detailIcon.sprite = permanent.icon; detailIcon.enabled = permanent.icon != null; }
+    if (detailName    != null) detailName.text    = permanent.skillName;
+    if (detailElement != null) detailElement.text = $"Permanent  ·  {permanent.category}";
+    if (detailTags    != null) detailTags.text    = "";
+    if (statMpValue   != null) statMpValue.text   = "—";
+    if (statCdValue   != null) statCdValue.text   = "—";
+    if (statRangeValue!= null) statRangeValue.text= "—";
+    if (descText      != null) descText.text      = !string.IsNullOrEmpty(permanent.description)
+                                                    ? permanent.description
+                                                    : permanent.GetBonusSummary();
+    if (journalDate   != null) journalDate.text   = "—";
+    if (journalLevel  != null) journalLevel.text  = "—";
+    if (journalTime   != null) journalTime.text   = "—";
+}
 
     /// <summary>
     /// Retourne les skills de l'onglet courant SANS appliquer les filtres élément/tag.
@@ -413,7 +471,7 @@ public class SkillLibraryUI : MonoBehaviour
                                         && !skill.HasTag(SkillTag.BasicAttack),
             SkillLibraryTab.Ultimes     => skill.skillType == SkillType.Ultimate,
             SkillLibraryTab.Passifs     => skill.skillType == SkillType.PassiveUtility,
-            SkillLibraryTab.Permanents  => skill.skillType == SkillType.Permanent,
+            SkillLibraryTab.Permanents  => false,
             _                           => false
         };
     }
@@ -532,7 +590,6 @@ public class SkillLibraryUI : MonoBehaviour
                 SkillType.Active         => "Actif",
                 SkillType.Ultimate       => "Ultime",
                 SkillType.PassiveUtility => "Passif",
-                SkillType.Permanent      => "Permanent",
                 _ => ""
             };
             string elemLabel = skill.IsNeutral

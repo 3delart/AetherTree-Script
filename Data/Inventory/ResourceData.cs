@@ -98,7 +98,7 @@ public class ResourceInstance
     public string       Name       => data?.resourceName ?? "Resource";
     public Sprite       Icon       => data?.icon;
     public ResourceType Type       => data?.resourceType ?? ResourceType.Other;
-    public int          MaxStack   => data?.maxStack     ?? 999;
+    public int          MaxStack   => data?.maxStack     ?? 99;
     public int          SellPrice  => data?.sellPrice    ?? 1;
     public bool         IsEmpty    => quantity <= 0;
 

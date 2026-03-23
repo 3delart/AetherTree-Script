@@ -132,12 +132,13 @@ public enum PNJType
 [System.Serializable]
 public class ShopEntry
 {
-    public string  itemID;      // Référence à ItemData ou SkillData
-    public int     aerisCost;   // Prix en Aeris
-    [Tooltip("Rang de Réputation Monde minimum pour accéder à cet item (0 = toujours visible)")]
+    [Tooltip("Glisse le SO ici (WeaponData, ArmorData, ConsumableData, ResourceData, SkillData...)")]
+    public ScriptableObject item;
+    public int     aerisCost;
+    [Tooltip("Rang de Réputation Monde minimum (0 = toujours visible)")]
     public int     requiredWorldReputationRank = 0;
     public bool    isUnlimitedStock = true;
-    public int     stockCount = 1; // Ignoré si isUnlimitedStock
+    public int     stockCount = 1;
 }
 
 // ── Faction — GDD v30 §19.6 ───────────────────────────────────
